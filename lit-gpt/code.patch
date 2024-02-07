@@ -1,0 +1,153 @@
+diff --git a/pretrain/openwebtext.py b/pretrain/openwebtext.py
+index 638ee6e..fc48694 100644
+--- a/pretrain/openwebtext.py
++++ b/pretrain/openwebtext.py
+@@ -22,22 +22,23 @@ from lit_gpt import Config
+ from lit_gpt.model import GPT, Block
+ from lit_gpt.utils import chunked_cross_entropy, estimate_flops, get_default_supported_precision, num_parameters
+ 
+-model_name = "pythia-70m"
++model_name = "Llama-2-70b-hf"
+ name = "openwebtext"
+ out_dir = Path("out") / name
+-data_dir = Path("data") / name
+-save_interval = 10
++data_dir = Path("/mnt/resource_nvme/data") / name
++save_interval = 100
+ eval_interval = 1000
+ eval_iters = 100
+ log_interval = 1
+ 
+ # Hyperparameters
+ learning_rate = 6e-4
+-batch_size = 125
+-micro_batch_size = 5
++batch_size = 6
++micro_batch_size = 6
+ gradient_accumulation_steps = batch_size // micro_batch_size
+ assert gradient_accumulation_steps > 0
+-max_iters = 600000  # num_epochs * (epoch_size // micro_batch_size) // devices
++# max_iters = 600000  # num_epochs * (epoch_size // micro_batch_size) // devices
++max_iters = 50
+ weight_decay = 1e-1
+ beta1 = 0.9
+ beta2 = 0.95
+@@ -51,7 +52,7 @@ hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str))
+ logger = CSVLogger("out", name, flush_logs_every_n_steps=log_interval)
+ 
+ 
+-def setup(devices: int = 1, precision: Optional[str] = None, resume: Union[bool, Path] = False) -> None:
++def setup(devices: int = 1, num_nodes: int = 1, precision: Optional[str] = None, resume: Union[bool, Path] = False) -> None:
+     precision = precision or get_default_supported_precision(training=True)
+ 
+     if devices > 1:
+@@ -65,7 +66,7 @@ def setup(devices: int = 1, precision: Optional[str] = None, resume: Union[bool,
+     else:
+         strategy = "auto"
+ 
+-    fabric = L.Fabric(devices=devices, strategy=strategy, precision=precision, loggers=logger)
++    fabric = L.Fabric(devices=devices, num_nodes=num_nodes, strategy=strategy, precision=precision, loggers=logger)
+     fabric.print(hparams)
+     fabric.launch(main, resume=resume)
+ 
+diff --git a/pretrain/openwebtext_trainer.py b/pretrain/openwebtext_trainer.py
+index 8edf816..259d968 100644
+--- a/pretrain/openwebtext_trainer.py
++++ b/pretrain/openwebtext_trainer.py
+@@ -1,8 +1,9 @@
+ # Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file.
+-
++import os
+ import math
+ import sys
+ import time
++import warnings
+ from pathlib import Path
+ from typing import Any, Dict, Mapping, Optional
+ 
+@@ -21,12 +22,14 @@ sys.path.append(str(wd))
+ 
+ from lit_gpt import Config
+ from lit_gpt.model import GPT, Block
+-from lit_gpt.utils import chunked_cross_entropy, estimate_flops, get_default_supported_precision
++from lit_gpt.utils import chunked_cross_entropy, estimate_flops, get_default_supported_precision, num_parameters
++
++warnings.filterwarnings("ignore")
+ 
+-model_name = "pythia-70m"
++model_name = "Llama-2-70b-hf"
+ name = "openwebtext"
+ out_dir = Path("out") / name
+-data_dir = Path("data") / name
++data_dir = Path("/mnt/resource_nvme/data") / name
+ save_interval = 1000
+ eval_interval = 1000
+ eval_iters = 100
+@@ -34,16 +37,17 @@ log_interval = 1
+ 
+ # Hyperparameters
+ learning_rate = 6e-4
+-batch_size = 125
+-micro_batch_size = 5
++batch_size = int(os.environ['BATCH_SIZE'])
++micro_batch_size = 6
+ gradient_accumulation_steps = batch_size // micro_batch_size
+ assert gradient_accumulation_steps > 0
+-max_iters = 600000  # num_epochs * (epoch_size // micro_batch_size) // devices
++#max_iters = 600000  # num_epochs * (epoch_size // micro_batch_size) // devices
++max_iters = 60  # num_epochs * (epoch_size // micro_batch_size) // devices
+ weight_decay = 1e-1
+ beta1 = 0.9
+ beta2 = 0.95
+ decay_lr = True
+-warmup_iters = 2000
++warmup_iters = 10
+ lr_decay_iters = max_iters
+ min_lr = 6e-5
+ 
+@@ -100,7 +104,7 @@ class LightningGPTModule(L.LightningModule):
+         input_ids, targets = batch
+         logits = self.module(input_ids)
+         loss = chunked_cross_entropy(logits, targets, chunk_size=0)
+-        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
++        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=False)
+         return loss
+ 
+     def validation_step(self, batch: Any, batch_idx: int) -> None:
+@@ -120,7 +124,9 @@ class LightningGPTModule(L.LightningModule):
+         return self.module.load_state_dict(state_dict, *args, **kwargs)
+ 
+ 
+-def main(devices: int = 1, precision: Optional[str] = None) -> None:
++def main(devices: int = 1, num_nodes: int = 1, batch_size: int = 6, precision: Optional[str] = None) -> None:
++
++
+     precision = precision or get_default_supported_precision(training=True)
+ 
+     if devices > 1:
+@@ -142,12 +148,14 @@ def main(devices: int = 1, precision: Optional[str] = None) -> None:
+     model_checkpoint = ModelCheckpoint(dirpath=out_dir, every_n_train_steps=save_interval, save_last=True, verbose=True)
+     trainer = L.Trainer(
+         devices=devices,
++        num_nodes=num_nodes,
+         strategy=strategy,
+         precision=precision,
+         logger=logger,
+         callbacks=[throughput, model_checkpoint],
+         max_steps=max_iters,
+         max_epochs=1,
++        min_epochs=0,
+         limit_val_batches=eval_iters,
+         accumulate_grad_batches=gradient_accumulation_steps,
+         log_every_n_steps=log_interval,
+@@ -169,8 +177,8 @@ def main(devices: int = 1, precision: Optional[str] = None) -> None:
+ 
+     train_data = Dataset(str(data_dir / "train.bin"), config.block_size)
+     val_data = Dataset(str(data_dir / "val.bin"), config.block_size)
+-    train_dataloader = DataLoader(train_data, batch_size=micro_batch_size, num_workers=2)
+-    val_dataloader = DataLoader(val_data, batch_size=micro_batch_size, num_workers=2)
++    train_dataloader = DataLoader(train_data, batch_size=micro_batch_size, num_workers=8)
++    val_dataloader = DataLoader(val_data, batch_size=micro_batch_size, num_workers=8)
+ 
+     t0 = time.perf_counter()
+     trainer.fit(model, train_dataloader, val_dataloader, ckpt_path="last")

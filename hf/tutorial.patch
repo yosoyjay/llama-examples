@@ -1,0 +1,61 @@
+diff --git a/chat_assistant/training/configs/fsdp_config.yaml b/chat_assistant/training/configs/fsdp_config.yaml
+index 1089362..96636e5 100644
+--- a/chat_assistant/training/configs/fsdp_config.yaml
++++ b/chat_assistant/training/configs/fsdp_config.yaml
+@@ -1,10 +1,10 @@
+ compute_environment: LOCAL_MACHINE
+-debug: false
++debug: true
+ distributed_type: FSDP
+ downcast_bf16: 'no'
+ fsdp_config:
+   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+-  fsdp_backward_prefetch_policy: BACKWARD_PRE
++  fsdp_backward_prefetch: BACKWARD_PRE
+   fsdp_cpu_ram_efficient_loading: true
+   fsdp_forward_prefetch: false
+   fsdp_offload_params: false
+@@ -22,4 +22,4 @@ same_network: true
+ tpu_env: []
+ tpu_use_cluster: false
+ tpu_use_sudo: false
+-use_cpu: false
+\ No newline at end of file
++use_cpu: false
+diff --git a/chat_assistant/training/train.py b/chat_assistant/training/train.py
+index 321b756..e91294a 100644
+--- a/chat_assistant/training/train.py
++++ b/chat_assistant/training/train.py
+@@ -22,6 +22,8 @@ from transformers import HfArgumentParser, TrainingArguments
+ from trl import SFTTrainer
+ from utils import create_and_prepare_model, create_datasets
+
++os.environ["WANDB_DISABLED"] = "true"
++
+ ########################################################################
+ # This is a fully working simple example to use trl's RewardTrainer.
+ #
+diff --git a/chat_assistant/training/utils.py b/chat_assistant/training/utils.py
+index f637859..404c7d2 100644
+--- a/chat_assistant/training/utils.py
++++ b/chat_assistant/training/utils.py
+@@ -115,14 +115,19 @@ def create_and_prepare_model(args):
+             else "auto"
+         )  # {"": 0}
+
++    default_dtype = torch.get_default_dtype()
++    torch.set_default_dtype(torch.bfloat16)
+     model = AutoModelForCausalLM.from_pretrained(
+         args.model_name_or_path,
+         load_in_8bit=load_in_8bit,
+         quantization_config=bnb_config,
+         device_map=device_map,
+         trust_remote_code=True,
++        cache_dir="/mnt/resource_nvme/checkpoints",
++        token=os.environ["HF_TOKEN"],
+         attn_implementation="flash_attention_2" if args.use_flash_attn else "eager",
+     )
++    torch.set_default_dtype(default_dtype)
+
+     peft_config = None
+     chat_template = None
