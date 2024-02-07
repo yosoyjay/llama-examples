@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=96
-#SBATCH --mem-per-cpu=11G # Important to enable "mix" use of GPUs across cluster users
 #SBATCH --partition=hpc
 #SBATCH --gres=gpu:8
 set -x -e
@@ -23,16 +22,6 @@ export NCCL_ASYNC_ERROR_HANDLING=1
 # export NCCL_SOCKET_NTHREADS=1
 # export NCCL_NSOCKS_PERTHREAD=1
 # export CUDA_LAUNCH_BLOCKING=1
-
-# AWS specific
-#export NCCL_PROTO=simple
-#export RDMAV_FORK_SAFE=1
-#export FI_EFA_FORK_SAFE=1
-#export FI_EFA_USE_DEVICE_RDMA=1
-#export FI_PROVIDER=efa
-#export FI_LOG_LEVEL=1
-#export NCCL_IB_DISABLE=1
-#export NCCL_SOCKET_IFNAME=ens
 
 # Azure specific
 export OMPI_MCA_plm_rsh_no_tree_spawn=1
